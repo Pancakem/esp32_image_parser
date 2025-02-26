@@ -38,3 +38,7 @@ Dumps the nvs partition
 Dumps the nvs partition as a JSON
 
 `$ python3 esp32_image_parser.py dump_nvs flashdump/esp32_flashdump.bin -partition nvs -nvs_output_type json`
+
+## Dump a partition-less OTA binary
+
+`$ python3 esp32_image_parser.py dump_no_part ota.bin -output dumped.bin`

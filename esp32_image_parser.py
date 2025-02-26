@@ -8,6 +8,7 @@ from makeelf.elf import *
 from esptool import *
 from esp32_firmware_reader import *
 from read_nvs import *
+from esptool.bin_image import *
 
 def image_base_name(path):
     filename_w_ext = os.path.basename(path)
@@ -23,7 +24,7 @@ def calcShFlg(flags):
         mask |= SHF.SHF_ALLOC
     if 'X' in flags:
         mask |= SHF.SHF_EXECINSTR
-            
+
     return mask
 
 # program header flags
@@ -151,28 +152,31 @@ def image2elf(filename, output_file, verbose=False):
     ###########################
     print_verbose(verbose, "\nAdding program headers")
     for (name, flags) in segments.items():
+        try:
+            if (name == '.iram0.vectors'):
+                # combine these
+                size = len(section_data['.iram0.vectors']['data']) + len(section_data['.iram0.text']['data'])
+            else:
+                size = len(section_data[name]['data'])
 
-        if (name == '.iram0.vectors'):
-            # combine these
-            size = len(section_data['.iram0.vectors']['data']) + len(section_data['.iram0.text']['data'])
-        else:
-            size = len(section_data[name]['data'])
-        
-        p_flags = calcPhFlg(flags)
-        addr = section_data[name]['addr']
-        align = 0x1000
-        p_type = PT.PT_LOAD
+            p_flags = calcPhFlg(flags)
+            addr = section_data[name]['addr']
+            align = 0x1000
+            p_type = PT.PT_LOAD
 
-        shstrtab_hdr, shstrtab = elf.get_section_by_name(name)
-        offset = shstrtab_hdr.sh_offset + size_of_phdrs # account for new offset
+            shstrtab_hdr, shstrtab = elf.get_section_by_name(name)
+            offset = shstrtab_hdr.sh_offset + size_of_phdrs # account for new offset
 
-        # build program header
-        Phdr = Elf32_Phdr(PT.PT_LOAD, p_offset=offset, p_vaddr=addr,
-                p_paddr=addr, p_filesz=size, p_memsz=size,
-                p_flags=p_flags, p_align=align, little=elf.little)
+            # build program header
+            Phdr = Elf32_Phdr(PT.PT_LOAD, p_offset=offset, p_vaddr=addr,
+                              p_paddr=addr, p_filesz=size, p_memsz=size,
+                              p_flags=p_flags, p_align=align, little=elf.little)
 
-        print_verbose(verbose, name + ": " + str(Phdr))
-        elf.Elf.Phdr_table.append(Phdr)
+            print_verbose(verbose, name + ": " + str(Phdr))
+            elf.Elf.Phdr_table.append(Phdr)
+        except Exception as e:
+            print_verbose(verbose, f"Exception {e}...continuing")
+            continue
 
     # write out elf file
     if output_file is not None:
@@ -215,7 +219,7 @@ def dump_partition(fh, part_name, offset, size, dump_file):
 def main():
     desc = 'ESP32 Firmware Image Parser Utility'
     arg_parser = argparse.ArgumentParser(description=desc)
-    arg_parser.add_argument('action', choices=['show_partitions', 'dump_partition', 'create_elf', 'dump_nvs'], help='Action to take')
+    arg_parser.add_argument('action', choices=['show_partitions', 'dump_partition', 'create_elf', 'dump_nvs', 'dump_no_part'], help='Action to take')
     arg_parser.add_argument('input', help='Firmware image input file')
     arg_parser.add_argument('-output', help='Output file name')
     arg_parser.add_argument('-nvs_output_type', help='output type for nvs dump', type=str, choices=["text","json"], default="text")
@@ -233,13 +237,22 @@ def main():
         # parse that ish
         part_table = read_partition_table(fh, verbose)
 
+        if args.action == 'dump_no_part':
+            if args.output is not None:
+                dump_file = args.output
+            else:
+                dump_file =  'dump_out.bin'
+
+            image2elf(args.input, dump_file, verbose)
+
+
         if args.action in ['dump_partition', 'create_elf', 'dump_nvs']:
             if (args.partition is None):
                 print("Need partition name")
                 return
 
             part_name = args.partition
-            
+
             if args.action == 'dump_partition' and args.output is not None:
                 dump_file = args.output
             else:
@@ -247,7 +260,7 @@ def main():
 
             if part_name in part_table:
                 part = part_table[part_name]
-            
+
                 if args.action == 'dump_partition':
                     dump_partition(fh, part_name, part['offset'], part['size'], dump_file)
                 if args.action == 'create_elf':
